@@ -1,31 +1,67 @@
-import requests
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
-# Assuming you have defined your bot and its CMD_HANDLER in config.py
-from config import CMD_HANDLER as cmd
+# noinspection PyUnresolvedReferences
+from utils.misc import modules_help, prefix
+from utils.scripts import format_exc
+from aiohttp import ClientSession
+from io import BytesIO
 
-API_URL = "https://api.nekosapi.com/v2/images/random"
+session = ClientSession()
 
 
-@Client.on_message(filters.command("randomanime", cmd) & filters.me)
-async def random_anime(client: Client, message: Message):
-    # Send the "Processing..." message
-    await message.edit("Fetching a random anime image...")
+class Post:
+    def __init__(self, source: dict, session: ClientSession):
+        self._json = source
+        self.session = session
 
-    # Make the API request
+    @property
+    async def image(self):
+        return (
+            self.file_url
+            if self.file_url
+            else self.large_file_url
+            if self.large_file_url
+            else self.source
+            if self.source and "pximg" not in self.source
+            else await self.pximg
+            if self.source
+            else None
+        )
+
+    @property
+    async def pximg(self):
+        async with self.session.get(self.source) as response:
+            return BytesIO(await response.read())
+
+    def __getattr__(self, item):
+        return self._json.get(item)
+
+
+async def random():
+    async with session.get(
+        url="https://danbooru.donmai.us/posts/random.json"
+    ) as response:
+        return Post(await response.json(encoding="utf-8"), session)
+
+
+@Client.on_message(filters.command(["arnd", "arandom"], prefix) & filters.me)
+async def anime_handler(client: Client, message: Message):
     try:
-        response = requests.get(API_URL)
-        response.raise_for_status()
-        data = response.json()["data"]["attributes"]
-        image_url = data["file"]
-        title = data["title"]
-    except (requests.exceptions.RequestException, KeyError):
-        await message.edit("Failed to fetch a random anime image.")
-        return
+        await message.edit("<b>Searching art</b>", parse_mode=enums.ParseMode.HTML)
+        ra = await random()
+        img = await ra.image
+        await message.reply_photo(
+            photo=img,
+            caption=f'<b>{ra.tag_string_general if ra.tag_string_general else "Untitled"}</b>',
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await message.delete()
+    except Exception as e:
+        await message.edit(format_exc(e), parse_mode=enums.ParseMode.HTML)
 
-    # Send the image and title as a reply
-    await client.send_photo(message.chat.id, image_url, caption=f"**Title:** {title}")
 
-    # Edit the original message to indicate success
-    await message.edit("Random anime image sent!")
+modules_help["anime"] = {
+    "arnd": "Random anime art (May get caught 18+)",
+    "arandom": "Random anime art (May get caught 18+)",
+}
